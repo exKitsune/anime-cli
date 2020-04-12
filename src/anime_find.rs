@@ -24,7 +24,6 @@ pub struct DCCPackage {
     pub number: i32,
     pub bot: String,
     pub filename: String,
-    pub sizekbits: i64,
 }
 
 fn find_package(query: &String, episode: &Option<u16>) -> Result<DCCPackage> {
@@ -47,7 +46,6 @@ fn find_package(query: &String, episode: &Option<u16>) -> Result<DCCPackage> {
         bot: bot_name.to_string(),
         number: first_package.number,
         filename: first_package.name.clone(),
-        sizekbits: first_package.sizekbits,
     })
 }
 
@@ -313,5 +311,4 @@ struct Package {
     bot_id: i64,
     number: i32,
     name: String,
-    sizekbits: i64,
 }
