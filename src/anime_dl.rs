@@ -14,6 +14,10 @@ use std::sync::mpsc::{channel, Receiver};
 use terminal_size::{Width, terminal_size};
 use std::sync::Arc;
 
+static IRC_SERVER: &str = "irc.rizon.net:6667";
+static IRC_CHANNEL: &str = "nibl";
+static IRC_NICKNAME: &str = "randomRustacean";
+
 static DCC_SEND_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"DCC SEND "?(.*)"? (\d+) (\d+) (\d+)"#).expect("Failed to create regex.")
 });
@@ -40,6 +44,18 @@ struct DCCSend {
 struct IRCConnection {
     socket: TcpStream,
     partial_msg: String,
+}
+
+impl Default for IRCRequest {
+    fn default() -> Self {
+        Self {
+            server: IRC_SERVER.to_string(),
+            channel: IRC_CHANNEL.to_string(),
+            nickname: IRC_NICKNAME.to_string(),
+            bots: vec![],
+            packages: vec![]
+        }
+    }
 }
 
 impl IRCConnection {
@@ -78,7 +94,7 @@ pub fn connect_and_download(request: IRCRequest, dir_path: Option<PathBuf>) -> R
         };
         let now = time::Instant::now();
         if let Some(msg) = message {
-            println!("{}",msg);
+            // println!("{}",msg);
             if msg.starts_with("PING :") {
                 let pong = msg.replace("PING", "PONG");
                 connection.socket.write(pong.as_bytes())?;
