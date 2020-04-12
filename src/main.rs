@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::ffi::OsStr;
 use std::process::exit;
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 use std::io;
 use getopts::Options;
@@ -95,7 +95,6 @@ fn main() {
 
         play = matches.opt_present("p");
 
-        // Get user input
         resolution = match matches.opt_str("r").as_ref().map(String::as_str) {
             Some("0") => None,
             Some(r) => Some(parse_number(String::from(r))),
@@ -213,9 +212,8 @@ fn main() {
         progress_bar.message(&pb_message);
         pb_message.clear();
 
-        let status_bar_sender_clone = status_bar_sender.clone();
         handle = thread::spawn(move || { // create an individual thread for each bar in the multibar with its own i/o
-            update_bar(progress_bar, receiver, status_bar_sender_clone);
+            update_bar(&mut progress_bar, receiver);
         });
 
         channel_senders.push(sender);
@@ -264,71 +262,28 @@ fn main() {
     multi_bar_handles.into_iter().for_each(|handle| handle.join().unwrap());
 }
 
-fn update_status_bar(progress_bar: Option<ProgressBar<Pipe>>, receiver: Receiver<String>) {
-    let reader = |num: Result<String, _>, msg: &str| { match num {
-        Ok(p) => p,
-        _ => {
-            eprintln!("Error updating status bar");
-            exit(1);
-        },
-    }};
-
-    if progress_bar.is_some() {
-        let mut pb = progress_bar.unwrap();
-        pb.tick();
-        let mut progress = reader(receiver.recv(), "Error updating status bar");
-
-        while !progress.eq("Success") {
-            pb.tick();
-            if progress.eq("Episode Finished Downloading") {
-                pb.inc();
-            }
-
-            pb.message(&format!("{} ", progress));
-            progress = reader(receiver.recv(), "Error updating status bar");
-        }
-        pb.message(&format!("{} ", progress));
-        pb.tick();
-        pb.finish();
-    } else {
-        let mut progress = reader(receiver.recv(), "Error updating status");
-
+fn update_status_bar(progress_bar: &mut ProgressBar<Pipe>, receiver: Receiver<String>) {
+    progress_bar.tick();
+    while let Ok(progress) = receiver.recv() {
         progress_bar.message(&format!("{} ", progress));
-        progress = match receiver.recv() {
-            Ok(p) => p,
-            _ => {
-                eprintln!("Error updating status bar");
-                exit(1);
-            },
-        };
+        progress_bar.tick();
+        match progress.as_str() {
+            "Episode Finished Downloading" => { progress_bar.inc(); },
+            "Success" => return progress_bar.finish(),
+            _ => {}
+        }
     }
 }
 
-fn update_bar(progress_bar: Option<ProgressBar<Pipe>>, receiver: Receiver<i64>, status_bar_sender: Sender<String>) {
-    let reader = |num: Result<i64, _>, msg: &str| { match num {
-        Ok(p) => p,
-        _ => {
-            eprintln!("Error updating progress bar");
-            exit(1);
-        },
+fn update_bar(progress_bar: &mut ProgressBar<Pipe>, receiver: Receiver<i64>) {
+    progress_bar.tick();
+    while let Ok(progress) = receiver.recv() {
+        if progress > 0 {
+            progress_bar.set(progress as u64);
+        } else {
+            return progress_bar.finish();
+        }
     };
-    //println!("{} progress, progress);
-    while progress > 0 {
-        progress_bar.set(progress as u64);
-        progress = match receiver.recv() {
-            Ok(p) => p,
-            _ => {
-                eprintln!("Error updating progress bar");
-                exit(1);
-            },
-        };
-    }
-
-    // Hacking for "sending on a closed channel" Error
-    if status_bar_sender.send("Episode Finished Downloading".to_string()).is_err() {
-        println!("Episode Finished Downloading")
-    }
-    progress_bar.finish();
 }
 
 fn parse_number(str_num: String) -> u16 {
