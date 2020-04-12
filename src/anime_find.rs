@@ -1,5 +1,5 @@
-use reqwest::Error;
 use serde::Deserialize;
+use anyhow::{Result, anyhow};
 
 const API_URL: &str = "https://api.nibl.co.uk/nibl";
 
@@ -11,20 +11,20 @@ pub struct DCCPackage {
     pub sizekbits: i64,
 }
 
-pub fn find_package(query: &String, episode: &Option<u16>) -> Result<DCCPackage, String> {
+pub fn find_package(query: &String, episode: &Option<u16>) -> Result<DCCPackage> {
     let packages = match search_packages(query, episode) {
         Ok(p) => p,
-        Err(e) => return Err(format!("Error while fetching results: {}", e)),
+        Err(e) => return Err(anyhow!("Error while fetching results: {}", e)),
     };
 
     let first_package = match packages.first() {
         Some(p) => p,
-        _ => return Err("Could not find any result for this query.".to_string()),
+        _ => return Err(anyhow!("Could not find any result for this query.")),
     };
 
     let bot_name = match find_bot_name(&first_package.bot_id) {
-        Some(b) => b,
-        _ => return Err("Results found, but unknown bot.".to_string()),
+        Ok(b) => b,
+        Err(e) => return Err(e),
     };
 
     Ok(DCCPackage {
@@ -35,37 +35,37 @@ pub fn find_package(query: &String, episode: &Option<u16>) -> Result<DCCPackage,
     })
 }
 
-fn search_packages(query: &String, episode: &Option<u16>) -> Result<Vec<Package>, Error> {
+fn search_packages(query: &String, episode: &Option<u16>) -> Result<Vec<Package>> {
     let mut search_url = format!("{}/search?query={}", API_URL, query);
     if let Some(episode) = episode {
-        search_url.push_str("&episodeNumber={}");
+        search_url.push_str("&episodeNumber=");
         search_url.push_str(&episode.to_string());
     }
-    let mut response = reqwest::get(&search_url)?;
-    let search_result: SearchResult = response.json()?;
-    if search_result.status != "OK" {
-        panic!("Could not search package: {}", search_result.message);
-    }
-    Ok(search_result.content)
-}
-
-fn find_bot_name(id: &i64) -> Option<String> {
-    let bot_list = get_bot_list();
-    if let Some(bot) = bot_list.iter().find(|bot| &bot.id == id) {
-        Some(bot.name.to_string())
+    let search_result: SearchResult = reqwest::blocking::get(&search_url)?.json()?;
+    if search_result.status == "OK" {
+        Ok(search_result.content)
     } else {
-        None
+        Err(anyhow!("Could not search package: {}", search_result.message))
     }
 }
 
-fn get_bot_list() -> Vec<Bot> {
-    let mut response =
-        reqwest::get(&format!("{}/bots", API_URL)).expect("Could not fetch bot list");
-    let bot_list: BotList = response.json().expect("Could not parse bot list.");
-    if bot_list.status != "OK" {
-        panic!("Could not fetch bot list: {}", bot_list.message);
+fn find_bot_name(id: &i64) -> Result<String> {
+    get_bot_list().and_then(|bot_list| {
+        if let Some(bot) = bot_list.iter().find(|bot| &bot.id == id) {
+            Ok(bot.name.to_string())
+        } else {
+            Err(anyhow!("Results found, but unknown bot."))
+        }
+    })
+}
+
+fn get_bot_list() -> Result<Vec<Bot>> {
+    let bot_list: BotList = reqwest::blocking::get(&format!("{}/bots", API_URL))?.json()?;
+    if bot_list.status == "OK" {
+        Ok(bot_list.content)
+    } else {
+        Err(anyhow!("Could not fetch bot list: {}", bot_list.message))
     }
-    bot_list.content
 }
 
 #[derive(Deserialize)]
@@ -94,6 +94,5 @@ struct Package {
     bot_id: i64,
     number: i32,
     name: String,
-    _size: String,
     sizekbits: i64,
 }

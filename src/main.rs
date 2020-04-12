@@ -59,43 +59,43 @@ fn get_cli_input(prompt: &str) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect(); // We collect args here
-    let program = args[0].clone();
-    let mut opts = Options::new();
-    opts.optopt("q", "query", "Query to run", "QUERY")
-        .optopt("e", "episode", "Episode number", "NUMBER")
-        .optopt("b", "batch", "Batch end number", "NUMBER")
-        .optopt("r", "resolution", "Resolution", "NUMBER")
-        .optflag("n", "noshow", "No auto viewer")
-        .optflag("h", "help", "print this help menu");
-
-    // Unfortunately, cannot use getopts to check for a single optional flag
-    // https://github.com/rust-lang-nursery/getopts/issues/46
-    if args.contains(&"-h".to_string()) || args.contains(&"--help".to_string()) {
-        print_usage(&program, opts);
-        return
-    }
-    let mut noshow = false;
-    if args.contains(&"-n".to_string()) || args.contains(&"--noshow".to_string()) {
-        noshow = true;
-    }
-
-    let matches = match opts.parse(&args[1..]) {
-        Ok(m) => m,
-        Err(error) => {
-            eprintln!("{}.", error);
-            eprintln!("{}", opts.short_usage(&program));
-            exit(1);
-        }
-    };
-
-    let cli = if args.len() > 1 { true } else { false }; // Are we in cli mode or prompt mode?
 
     let mut query: String;
     let resolution: Option<u16>;
-    let episode: Option<u16>;
-    let mut batch: Option<u16>;
+    let mut episode: Option<u16> = None;
+    let mut last_ep: Option<u16> = None;
+    let play: bool;
 
-    if cli { // Get user input
+    // Are we in cli mode or prompt mode?
+    if args.len() > 1 {
+        let program = args[0].clone();
+        let mut opts = Options::new();
+        opts.optopt("q", "query", "Query to run", "QUERY")
+            .optopt("e", "episode", "Start from this episode", "NUMBER")
+            .optopt("t", "to", "Last episode", "NUMBER")
+            .optopt("r", "resolution", "Resolution", "NUMBER")
+            .optflag("p", "play", "Open with a player")
+            .optflag("h", "help", "print this help menu");
+    
+        let matches = match opts.parse(&args[1..]) {
+            Ok(m) => m,
+            Err(error) => {
+                eprintln!("{}.", error);
+                eprintln!("{}", opts.short_usage(&program));
+                exit(1);
+            }
+        };
+    
+        // Unfortunately, cannot use getopts to check for a single optional flag
+        // https://github.com/rust-lang-nursery/getopts/issues/46
+        if matches.opt_present("h") {
+            print_usage(&program, opts);
+            return
+        }
+
+        play = matches.opt_present("p");
+
+        // Get user input
         resolution = match matches.opt_str("r").as_ref().map(String::as_str) {
             Some("0") => None,
             Some(r) => Some(parse_number(String::from(r))),
@@ -104,19 +104,16 @@ fn main() {
 
         query = matches.opt_str("q").unwrap();
 
-        episode = match matches.opt_str("e") {
-            Some(ep) => Some(parse_number(ep)),
-            _ => None
-        };
-
-        batch = match matches.opt_str("b") {
-            Some(b) => Some(parse_number(b)),
-            _ => None
+        if let Some(ep) = matches.opt_str("e") {
+            episode = Some(parse_number(ep))
         }
 
+        if let Some(t) = matches.opt_str("t") {
+            last_ep = Some(parse_number(t))
+        }
     } else {
         println!("Welcome to anime-cli");
-        println!("Default resolution: None | episode: None | batch = episode");
+        println!("Default: resolution => None | episode => None | to == episode | play => false");
         println!("Resolution shortcut: 1 => 480p | 2 => 720p | 3 => 1080p");
         query = get_cli_input("Anime/Movie name: ");
         resolution =  match parse_number(get_cli_input("Resolution: ")) {
@@ -126,35 +123,37 @@ fn main() {
             3 => Some(1080),
             r => Some(r),
         };
-        episode = match parse_number(get_cli_input("Episode number: ")) {
+        episode = match parse_number(get_cli_input("Start from the episode: ")) {
             0 => None,
             e => Some(e),
         };
-        batch = match parse_number(get_cli_input("Batch Ep End Number: ")) {
+        last_ep = match parse_number(get_cli_input("To this episode: ")) {
             0 => { if episode.is_some() { episode } else { None } },
             b => Some(b),
         };
+        play = get_cli_input("Play now? [y/N]: ").to_ascii_lowercase().eq("y");
     }
 
-    query = query + match resolution { // If resolution entered, add a resolution to the query
-        Some(x) => format!(" {}", x),
-        _ => "".to_string(),
-    }.as_str();
+    // If resolution entered, add a resolution to the query
+    if let Some(res) = resolution {
+        query.push(' ');
+        query.push_str(&res.to_string());
+    }
 
-    if batch.is_some() && batch.unwrap() < episode.unwrap_or(1) { // Make sure batch end is never smaller than episode start
-        batch = episode;
+    if last_ep.is_some() && last_ep.unwrap() < episode.unwrap_or(1) { // Make sure batch end is never smaller than episode start
+        last_ep = episode;
     }
 
     let mut dccpackages = vec![];
 
     let mut num_episodes = 0;  // Search for packs, verify it is media, and add to a list
-    for i in episode.unwrap_or(1)..batch.unwrap_or(episode.unwrap_or(1)) + 1 {
-        if episode.is_some() || batch.is_some() {
+    for i in episode.unwrap_or(1)..last_ep.unwrap_or(episode.unwrap_or(1)) + 1 {
+        if episode.is_some() || last_ep.is_some() {
             println!("Searching for {} episode {}", query, i);
         } else {
             println!("Searching for {}", query);
         }
-        match anime_find::find_package(&query, &episode.or(batch).and(Some(i))) {
+        match anime_find::find_package(&query, &episode.or(last_ep).and(Some(i))) {
             Ok(p) => {
                 match Path::new(&p.filename).extension().and_then(OsStr::to_str) {
                     Some(ext) => {
@@ -180,48 +179,39 @@ fn main() {
         Ok(_) => println!{"Created folder {}", &query},
         _ => eprintln!{"Could not create a new folder, does it exist?"},
     };
-    let dir_path= Path::new(&query).to_owned();
+    let dir_path = Path::new(&query).to_owned();
 
-    let terminal_dimensions  = term_size::dimensions();
+    let terminal_dimensions = term_size::dimensions();
 
-    let mut channel_senders  = vec![];
+    let mut channel_senders = vec![];
     let mut multi_bar = MultiBar::new();
     let mut multi_bar_handles = vec![];
     let (status_bar_sender, status_bar_receiver) = channel();
 
-    let mut safe_to_spawn_bar = true; // Even if one bar is safe to spawn, sending stdout outputs will interfere with the bars
+    let mut pb_message = String::new();
     for i in 0..dccpackages.len() { //create bars for all our downloads
         let (sender, receiver) = channel();
         let handle;
 
-        let pb_message;
         match terminal_dimensions {
-          Some((w, _)) => {
-              let acceptable_length = w / 2;
-              if &dccpackages[i].filename.len() > &acceptable_length { // trim the filename
-                  let first_half = &dccpackages[i].filename[..dccpackages[i].filename.char_indices().nth(acceptable_length/2).unwrap().0];
-                  let second_half = &dccpackages[i].filename[dccpackages[i].filename.char_indices().nth_back(acceptable_length/2).unwrap().0..];
-                  if acceptable_length < 50 {
-                      pb_message = format!("{}...{}: ", first_half, second_half);
-                  } else {
-                      pb_message = format!("...{}: ", second_half);
-                  }
-              } else {
-                  pb_message = format!("{}: ", dccpackages[i].filename);
-              }
-          },
-            _ => pb_message = format!("{}: ", dccpackages[i].filename),
+            Some((w, _)) if dccpackages[i].filename.len() > &w/2 => { // trim the filename
+                let acceptable_length = w / 2;
+                let first_half = &dccpackages[i].filename[..dccpackages[i].filename.char_indices().nth(acceptable_length/2).unwrap().0];
+                let second_half = &dccpackages[i].filename[dccpackages[i].filename.char_indices().nth_back(acceptable_length/2).unwrap().0..];
+                if acceptable_length < 50 {
+                    pb_message.push_str(first_half);
+                }
+                pb_message.push_str("...");
+                pb_message.push_str(second_half);
+            },
+            _ => pb_message.push_str(&dccpackages[i].filename)
         };
-        let progress_bar;
-        if safe_to_spawn_bar {
-            let mut pb = multi_bar.create_bar(dccpackages[i].sizekbits as u64);
-            pb.set_units(Units::Bytes);
-            pb.message(&pb_message);
-            progress_bar = Some(pb);
-        } else { // If we can't spawn a bar, we just issue normal stdout updates
-            progress_bar = None;
-            multi_bar.println(&pb_message);
-        }
+        pb_message.push_str(": ");
+
+        let mut progress_bar = multi_bar.create_bar(dccpackages[i].sizekbits as u64);
+        progress_bar.set_units(Units::Bytes);
+        progress_bar.message(&pb_message);
+        pb_message.clear();
 
         let status_bar_sender_clone = status_bar_sender.clone();
         handle = thread::spawn(move || { // create an individual thread for each bar in the multibar with its own i/o
@@ -257,19 +247,12 @@ fn main() {
         packages: dccpackages.clone().into_iter().map(|package| package.number.to_string()).collect(),
     };
 
-    let mut video_handle = None;
-    if !noshow {
-        video_handle =
-            if cfg!(feature = "mpv") {
-                Some(play_video(dccpackages.into_iter().map(|package| package.filename).collect(), dir_path.clone()))
-            } else {
-                if num_episodes == 1 { //If we don't have mpv, we'll open the file using default media app. We can't really hook into it so we limit to 1 file so no spam
-                    Some(play_video(dccpackages.into_iter().map(|package| package.filename).collect(), dir_path.clone()))
-                } else {
-                    None
-                }
-            }
-    }
+     //If we don't have mpv, we'll open the file using default media app. We can't really hook into it so we limit to 1 file so no spam
+    let video_handle = if play && (num_episodes == 1 || cfg!(feature = "mpv")) {
+        Some(play_video(dccpackages.into_iter().map(|package| package.filename).collect(), dir_path.clone()))
+    } else {
+        None
+    };
 
     if let Err(e) = anime_dl::connect_and_download(irc_request, channel_senders, status_bar_sender, dir_path.clone()) {
         eprintln!("{}", e);
@@ -341,7 +324,11 @@ fn update_bar(progress_bar: Option<ProgressBar<Pipe>>, receiver: Receiver<i64>, 
         };
     }
 
-    status_bar_sender.send("Episode Finished Downloading".to_string()).unwrap();
+    // Hacking for "sending on a closed channel" Error
+    if status_bar_sender.send("Episode Finished Downloading".to_string()).is_err() {
+        println!("Episode Finished Downloading")
+    }
+    progress_bar.finish();
 }
 
 fn parse_number(str_num: String) -> u16 {
@@ -350,11 +337,11 @@ fn parse_number(str_num: String) -> u16 {
         Ok(e) => e,
         Err(err) => {
             if err.to_string() == "cannot parse integer from empty string" {
-                eprintln!("{}", err);
+                0
             } else {
                 eprintln!("Input must be numeric.");
+                exit(1);
             }
-            exit(1);
         }
     }
 }
