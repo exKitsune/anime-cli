@@ -13,9 +13,7 @@ mod play;
 fn main() {
     let args: Vec<String> = std::env::args().collect(); // We collect args here
 
-    let cli = args.len() > 1;
-
-    if cli && args[1].starts_with("/msg"){
+    if args.len() > 1 && args[1].starts_with("/msg"){
         let len = args.len() - 1;
         let mut bots = Vec::with_capacity(len);
         let mut packages = Vec::with_capacity(len);
