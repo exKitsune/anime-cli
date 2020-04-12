@@ -96,13 +96,11 @@ fn print_usage(program: &str, opts: Options) {
                                        \n\
     Common resolutions 480/720/1080    \n\
                                        \n\
-    Batch end number means last episode\n\
-    in a range of episodes             \n\
-      e.g. episode ------------> batch \n\
-      everything from 1 -------> 10    \n\
+    e.g. -e 1 -t 10                    \n\
+    everything from 1 -------> 10      \n\
                                        \n\
     You can apply default resolution   \n\
-    and default batch # with a blank   \n\
+    and default to # with a blank      \n\
     ===================================\n
     ");
 }
@@ -148,9 +146,11 @@ pub fn find(args: Vec<String>, cli: bool) -> (Vec<String>, Vec<String>, Option<P
         opts.optopt("q", "query", "Query to run", "QUERY")
             .optopt("e", "episode", "Start from this episode", "NUMBER")
             .optopt("t", "to", "Last episode", "NUMBER")
-            .optopt("r", "resolution", "Resolution", "NUMBER")
-            .optflag("p", "play", "Open with a player")
-            .optflag("h", "help", "print this help menu");
+            .optopt("r", "resolution", "Resolution", "NUMBER");
+        if cfg!(feature = "play") {
+            opts.optflag("p", "play", "Open with a player");
+        }
+        opts.optflag("h", "help", "print this help menu");
     
         let matches = match opts.parse(&args[1..]) {
             Ok(m) => m,
@@ -190,7 +190,11 @@ pub fn find(args: Vec<String>, cli: bool) -> (Vec<String>, Vec<String>, Option<P
         }
     } else {
         println!("Welcome to anime-cli");
-        println!("Default: resolution => None | episode => None | to == episode | play => false");
+        if cfg!(feature = "play") {
+            println!("Default: resolution => None | episode => None | to == episode | play => false");
+        } else {
+            println!("Default: resolution => None | episode => None | to == episode");
+        }
         println!("Resolution shortcut: 1 => 480p | 2 => 720p | 3 => 1080p");
         while query.is_empty() {
             query = get_cli_input("Anime/Movie name: ");

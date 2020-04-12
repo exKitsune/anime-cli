@@ -3,20 +3,33 @@ Command Line Interface to find, download, and stream anime.
 
 ## Usage
 ```
-Usage: anime-cli -q "QUERY" [-e NUMBER] [-b NUMBER] [-r NUMBER] [-n] [-h]
+Usage: anime-cli "/msg <BOTNAME> xdcc send #<PACKNUMBER>"
+```
+
+With `find` feature.
+```
+Usage: anime-cli -q "QUERY" [-e NUMBER] [-t NUMBER] [-r NUMBER] [-h]
 
 Options:                               
 -q, --query         QUERY   Query to run
 -e, --episode       NUMBER  Episode number
--b, --batch         NUMBER  Download episodes from -e up to -b
+-t, --to            NUMBER  Download episodes from -e up to -t
 -r, --resolution    NUMBER  Specifies resolution, default is 720, put 0 in order to remove resolution from search
--n, --noshow                Do not automatically open media player
 -h, --help                  Print this help menu
+```
+
+When `with-mpv` or `with-opener` feature enabled, you can use `-p`.
+```
+-p, --play                  Open with a player automatically
 ```
 
 Calling `anime-cli` without any flags and arguments or double clicking the executable (if you're on Windows) will cause it to prompt the user for inputs.
 
 #### Examples:
+```
+$ anime-cli "/msg [DCTP]Arutha xdcc send #273"
+Detective Conan - 128 [DCTP][7D1B5A8B].avi: 1.05 MB / 173.24 MB [>----------------------------] 0.61 % 129.63 KB/s 23m
+```
 ```
 $ anime-cli -q "steins gate 0" -e 1
 [HorribleSubs] Steins Gate 0 - 01 [720p].mkv": 2.23 MB / 322.02 MB [>--------] 0.69 % 1.05 MB/s 5m
@@ -26,7 +39,7 @@ $ anime-cli -q "unknown anime" -e 14
 Could not find any result for this query.
 ```
 ```
-$ anime-cli -q "Sakamoto Desu ga" -b 12
+$ anime-cli -q "Sakamoto Desu ga" -t 12
 [HorribleSubs] Sakamoto desu ga - 01 [720p].mkv: 329.73 MB / 329.73 MB [==========================] 100.00 % 4.69 MB/s
 [HorribleSubs] Sakamoto desu ga - 02 [720p].mkv: 329.07 MB / 329.07 MB [==========================] 100.00 % 4.95 MB/s
 [HorribleSubs] Sakamoto desu ga - 03 [720p].mkv: 215.03 MB / 329.65 MB [================>---------]  65.23 % 4.23 MB/s
@@ -37,10 +50,10 @@ $ anime-cli -q "Sakamoto Desu ga" -b 12
 If you've chosen to use MPV, as soon as you start downloading, MPV will open and begin playing the media file. If you're downloading multiple files at once, it will automatically move onto the next movie when the previous movie ends.
 
 ## Pre-requisites
-In order to play videos you will need mpv.
+In order to play videos you will need mpv and
+`cargo build --release --features=with-mpv`
 
-However, if you do not wish to autoplay videos, you can do
-`cargo build --release --no-default-features`
+However, if you only wish to download with `/msg` commands, you can do `cargo build --release --no-default-features`
 
 ### Archlinux
 ```
