@@ -12,6 +12,7 @@ use std::thread::sleep;
 use pbr::{MultiBar, Pipe, ProgressBar, Units};
 use std::sync::mpsc::{channel, Receiver};
 use terminal_size::{Width, terminal_size};
+use std::sync::Arc;
 
 static DCC_SEND_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"DCC SEND "?(.*)"? (\d+) (\d+) (\d+)"#).expect("Failed to create regex.")
@@ -108,10 +109,11 @@ pub fn connect_and_download(request: IRCRequest, dir_path: PathBuf) -> Result<()
     println!("Connected!");
 
     let mut channel_senders = vec![];
-    let mut multi_bar = MultiBar::new();
+    let multi_bar = Arc::new(MultiBar::new());
     let mut multi_bar_handles = vec![];
     let (status_bar_sender, status_bar_receiver) = channel();
     let mut pb_message = String::new();
+    let mut safe_to_spawn_bar = true;
 
     let mut i = 0;
     let mut requests : Vec<DCCSend> = vec![];
@@ -124,29 +126,52 @@ pub fn connect_and_download(request: IRCRequest, dir_path: PathBuf) -> Result<()
             let (sender, receiver) = channel();
             let handle;
 
+            let filename = &requests[i].filename;
             match terminal_size() {
-                Some((Width(w), _)) if requests[i].filename.len() > w as usize / 2 => { // trim the filename
-                    let filename = &requests[i].filename;
+                Some((Width(w), _)) if filename.len() > w as usize / 2 => { // trim the filename
                     let acceptable_length = w as usize / 2;
-                    let first_half = &filename[..filename.char_indices().nth(acceptable_length/2).unwrap().0];
-                    let second_half = &filename[filename.char_indices().nth_back(acceptable_length/2).unwrap().0..];
-                    if acceptable_length < 50 {
-                        pb_message.push_str(first_half);
+                    if acceptable_length > 35 {
+                        if acceptable_length > 50 { // 50 and 35 are arbitrary numbers
+                            let first_half = &filename[..filename.char_indices().nth(acceptable_length / 2).unwrap().0];
+                            pb_message.push_str(&first_half);
+                        }
+                        let second_half = &filename[filename.char_indices().nth_back(acceptable_length / 2).unwrap().0..];
+                        pb_message.push_str("...");
+                        pb_message.push_str(&second_half);
+                    } else {
+                        safe_to_spawn_bar = false;
                     }
-                    pb_message.push_str("...");
-                    pb_message.push_str(second_half);
                 },
-                _ => pb_message.push_str(&requests[i].filename)
+                None => safe_to_spawn_bar = false,
+                _ => pb_message.push_str(&filename)
             };
-            pb_message.push_str(": ");
 
-            let mut progress_bar = multi_bar.create_bar(requests[i].file_size as u64);
-            progress_bar.set_units(Units::Bytes);
-            progress_bar.message(&pb_message);
+            if safe_to_spawn_bar {
+                pb_message.push_str(": ");
+            } else {
+                pb_message.push_str(&filename);
+                pb_message.push_str(" added to list");
+            };
+
+            let multi_bar_clone = multi_bar.clone();
+            let request_file_size = requests[i].file_size as u64;
+            let pb_message_clone = pb_message.clone();
             pb_message.clear();
-
             handle = thread::spawn(move || { // create an individual thread for each bar in the multibar with its own i/o
-                update_bar(&mut progress_bar, receiver);
+                if safe_to_spawn_bar {
+                    let mut progress_bar = multi_bar_clone.create_bar(request_file_size);
+                    progress_bar.set_units(Units::Bytes);
+                    progress_bar.message(&pb_message_clone);
+                    update_bar(&mut progress_bar, receiver);
+                } else {
+                    // If we can't spawn a bar, we just issue normal stdout updates
+                    multi_bar_clone.println(&pb_message_clone);
+                    while let Ok(progress) = receiver.recv() {
+                        if progress <= 0 {
+                            break
+                        }
+                    };
+                }
             });
 
             channel_senders.push(sender);
@@ -249,12 +274,21 @@ pub fn connect_and_download(request: IRCRequest, dir_path: PathBuf) -> Result<()
     connection.socket.write("QUIT\r\n".as_bytes())?;
     connection.socket.shutdown(Shutdown::Both)?;
 
-    
-    let mut status_bar = multi_bar.create_bar(requests.len() as u64);
-    status_bar.set_units(Units::Default);
-    status_bar.message(&format!("{}: ", "Waiting..."));
+    let multi_bar_clone = multi_bar.clone();
     let status_bar_handle = thread::spawn(move || {
-        update_status_bar(&mut status_bar, status_bar_receiver);
+        if safe_to_spawn_bar {
+            let mut status_bar = multi_bar_clone.create_bar(requests.len() as u64);
+            status_bar.set_units(Units::Default);
+            status_bar.message(&format!("{}: ", "Waiting..."));
+            update_status_bar(&mut status_bar, status_bar_receiver);
+        } else {
+            while let Ok(progress) = status_bar_receiver.recv() {
+                println!("{} ", progress);
+                if progress.as_str() == "Success" {
+                    break
+                }
+            }
+        }
     });
     multi_bar_handles.push(status_bar_handle);
 

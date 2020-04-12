@@ -14,7 +14,6 @@ categories = ["command-line-utilities"]
 [dependencies]
 anyhow = "1.0"
 getopts = "0.2"
-pbr = "1.0"
 regex = "1"
 rand = "0.7"
 terminal_size = "0.1"
@@ -23,6 +22,7 @@ serde = { version = "1.0", features = ["derive"] }
 once_cell = { version = "1.3", features = ["parking_lot"] }
 reqwest = { version = "0.10", features = ["blocking", "json", "gzip"] }
 mpv = { version = "0.2", optional = true }
+pbr = { git = "https://github.com/a8m/pb" }
 
 [features]
 default = ["mpv"]
