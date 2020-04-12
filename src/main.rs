@@ -2,11 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::ffi::OsStr;
 use std::process::exit;
-use std::sync::mpsc::{channel, Receiver};
-use std::thread;
 use std::io;
 use getopts::Options;
-use pbr::{MultiBar, Pipe, ProgressBar, Units};
+use std::thread;
+use std::thread::JoinHandle;
 
 mod anime_dl;
 mod anime_find;
@@ -60,14 +59,16 @@ fn get_cli_input(prompt: &str) -> String {
 fn main() {
     let args: Vec<String> = std::env::args().collect(); // We collect args here
 
-    let mut query: String;
+    let cli = args.len() > 1;
+
+    let mut query: String = String::new();
     let resolution: Option<u16>;
     let mut episode: Option<u16> = None;
     let mut last_ep: Option<u16> = None;
     let play: bool;
 
     // Are we in cli mode or prompt mode?
-    if args.len() > 1 {
+    if cli {
         let program = args[0].clone();
         let mut opts = Options::new();
         opts.optopt("q", "query", "Query to run", "QUERY")
@@ -93,54 +94,57 @@ fn main() {
             return
         }
 
-        play = matches.opt_present("p");
-
-        resolution = match matches.opt_str("r").as_ref().map(String::as_str) {
-            Some("0") => None,
-            Some(r) => Some(parse_number(String::from(r))),
-            _ => Some(720),
-        };
-
-        query = matches.opt_str("q").unwrap();
-
-        if let Some(ep) = matches.opt_str("e") {
-            episode = Some(parse_number(ep))
-        }
-
-        if let Some(t) = matches.opt_str("t") {
-            last_ep = Some(parse_number(t))
+        if let Some(q) = matches.opt_str("q") {
+            query = q;
+            play = matches.opt_present("p");
+            resolution = match matches.opt_str("r").as_ref().map(String::as_str) {
+                Some("0") => None,
+                Some(r) => parse_number(String::from(r)),
+                _ => Some(720),
+            };
+            if let Some(ep) = matches.opt_str("e") {
+                episode = parse_number(ep)
+            }
+            if let Some(t) = matches.opt_str("t") {
+                last_ep = parse_number(t)
+            }
+        } else {
+            return eprintln!("query is needed.");
         }
     } else {
         println!("Welcome to anime-cli");
         println!("Default: resolution => None | episode => None | to == episode | play => false");
         println!("Resolution shortcut: 1 => 480p | 2 => 720p | 3 => 1080p");
-        query = get_cli_input("Anime/Movie name: ");
-        resolution =  match parse_number(get_cli_input("Resolution: ")) {
-            0 => None,
-            1 => Some(480),
-            2 => Some(720),
-            3 => Some(1080),
-            r => Some(r),
+        while query.is_empty() {
+            query = get_cli_input("Anime/Movie name: ");
+        }
+    
+        resolution = match parse_number(get_cli_input("Resolution: ")) {
+            Some(1) => Some(480),
+            Some(2) => Some(720),
+            Some(3) => Some(1080),
+            x => x,
         };
-        episode = match parse_number(get_cli_input("Start from the episode: ")) {
-            0 => None,
-            e => Some(e),
-        };
+        episode = parse_number(get_cli_input("Start from the episode: "));
         last_ep = match parse_number(get_cli_input("To this episode: ")) {
-            0 => { if episode.is_some() { episode } else { None } },
-            b => Some(b),
+            None if episode.is_some() => episode,
+            x => x,
         };
         play = get_cli_input("Play now? [y/N]: ").to_ascii_lowercase().eq("y");
     }
+
+    // Make sure last episode isn't smaller than episode start
+    last_ep.and_then(|t| {
+        if t < episode.unwrap_or(1) {
+            std::mem::swap(&mut episode, &mut last_ep); // swap them
+        }
+        Some(())
+    });
 
     // If resolution entered, add a resolution to the query
     if let Some(res) = resolution {
         query.push(' ');
         query.push_str(&res.to_string());
-    }
-
-    if last_ep.is_some() && last_ep.unwrap() < episode.unwrap_or(1) { // Make sure batch end is never smaller than episode start
-        last_ep = episode;
     }
 
     let mut dccpackages = vec![];
@@ -180,63 +184,6 @@ fn main() {
     };
     let dir_path = Path::new(&query).to_owned();
 
-    let terminal_dimensions = term_size::dimensions();
-
-    let mut channel_senders = vec![];
-    let mut multi_bar = MultiBar::new();
-    let mut multi_bar_handles = vec![];
-    let (status_bar_sender, status_bar_receiver) = channel();
-
-    let mut pb_message = String::new();
-    for i in 0..dccpackages.len() { //create bars for all our downloads
-        let (sender, receiver) = channel();
-        let handle;
-
-        match terminal_dimensions {
-            Some((w, _)) if dccpackages[i].filename.len() > &w/2 => { // trim the filename
-                let acceptable_length = w / 2;
-                let first_half = &dccpackages[i].filename[..dccpackages[i].filename.char_indices().nth(acceptable_length/2).unwrap().0];
-                let second_half = &dccpackages[i].filename[dccpackages[i].filename.char_indices().nth_back(acceptable_length/2).unwrap().0..];
-                if acceptable_length < 50 {
-                    pb_message.push_str(first_half);
-                }
-                pb_message.push_str("...");
-                pb_message.push_str(second_half);
-            },
-            _ => pb_message.push_str(&dccpackages[i].filename)
-        };
-        pb_message.push_str(": ");
-
-        let mut progress_bar = multi_bar.create_bar(dccpackages[i].sizekbits as u64);
-        progress_bar.set_units(Units::Bytes);
-        progress_bar.message(&pb_message);
-        pb_message.clear();
-
-        handle = thread::spawn(move || { // create an individual thread for each bar in the multibar with its own i/o
-            update_bar(&mut progress_bar, receiver);
-        });
-
-        channel_senders.push(sender);
-        multi_bar_handles.push(handle);
-    }
-
-    let mut status_bar = None;
-    if safe_to_spawn_bar {
-        let mut sb = multi_bar.create_bar(dccpackages.len() as u64);
-        sb.set_units(Units::Default);
-        sb.message(&format!("{}: ", "Waiting..."));
-        status_bar = Some(sb);
-    }
-
-    let status_bar_handle = thread::spawn(move || {
-        update_status_bar(status_bar, status_bar_receiver);
-    });
-    multi_bar_handles.push(status_bar_handle);
-
-    let _ = thread::spawn(move || { // multi bar listen is blocking
-        multi_bar.listen();
-    });
-
     let irc_request = anime_dl::IRCRequest {
         server: IRC_SERVER.to_string(),
         channel: IRC_CHANNEL.to_string(),
@@ -252,47 +199,22 @@ fn main() {
         None
     };
 
-    if let Err(e) = anime_dl::connect_and_download(irc_request, channel_senders, status_bar_sender, dir_path.clone()) {
+    if let Err(e) = anime_dl::connect_and_download(irc_request, dir_path.clone()) {
         eprintln!("{}", e);
         exit(1);
     };
     if let Some(vh) = video_handle {
         vh.join().unwrap();
     }
-    multi_bar_handles.into_iter().for_each(|handle| handle.join().unwrap());
 }
 
-fn update_status_bar(progress_bar: &mut ProgressBar<Pipe>, receiver: Receiver<String>) {
-    progress_bar.tick();
-    while let Ok(progress) = receiver.recv() {
-        progress_bar.message(&format!("{} ", progress));
-        progress_bar.tick();
-        match progress.as_str() {
-            "Episode Finished Downloading" => { progress_bar.inc(); },
-            "Success" => return progress_bar.finish(),
-            _ => {}
-        }
-    }
-}
-
-fn update_bar(progress_bar: &mut ProgressBar<Pipe>, receiver: Receiver<i64>) {
-    progress_bar.tick();
-    while let Ok(progress) = receiver.recv() {
-        if progress > 0 {
-            progress_bar.set(progress as u64);
-        } else {
-            return progress_bar.finish();
-        }
-    };
-}
-
-fn parse_number(str_num: String) -> u16 {
+fn parse_number(str_num: String) -> Option<u16> {
     let c_str_num = str_num.replace(|c: char| !c.is_numeric(), "");
     match c_str_num.parse::<u16>() {
-        Ok(e) => e,
+        Ok(e) => Some(e),
         Err(err) => {
             if err.to_string() == "cannot parse integer from empty string" {
-                0
+                None
             } else {
                 eprintln!("Input must be numeric.");
                 exit(1);
@@ -302,7 +224,7 @@ fn parse_number(str_num: String) -> u16 {
 }
 
 #[cfg(feature = "mpv")]
-fn play_video(filenames: Vec<String>, dir_path: PathBuf) -> thread::JoinHandle<()> {
+fn play_video(filenames: Vec<String>, dir_path: PathBuf) -> JoinHandle<()> {
     thread::spawn(move || {
         thread::sleep(std::time::Duration::from_secs(5));
         let mut i = 0;
@@ -376,7 +298,7 @@ fn play_video(filenames: Vec<String>, dir_path: PathBuf) -> thread::JoinHandle<(
 }
 
 #[cfg(not(feature = "mpv"))]
-fn play_video(filenames: Vec<String>, dir_path: PathBuf) -> thread::JoinHandle<()> {
+fn play_video(filenames: Vec<String>, dir_path: PathBuf) -> JoinHandle<()> {
     thread::spawn(move || {
         thread::sleep(std::time::Duration::from_secs(5));
         let filename = &filenames[0];

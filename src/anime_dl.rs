@@ -9,6 +9,9 @@ use once_cell::sync::Lazy;
 use std::sync::mpsc::Sender;
 use regex::Regex;
 use std::thread::sleep;
+use pbr::{MultiBar, Pipe, ProgressBar, Units};
+use std::sync::mpsc::{channel, Receiver};
+use terminal_size::{Width, terminal_size};
 
 static DCC_SEND_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"DCC SEND "?(.*)"? (\d+) (\d+) (\d+)"#).expect("Failed to create regex.")
@@ -55,8 +58,14 @@ impl IRCConnection {
     }
 }
 
-pub fn connect_and_download(request: IRCRequest, channel_senders: Vec<Sender<i64>>, status_bar_sender: Sender<String>, dir_path: PathBuf) -> Result<()> {
-    status_bar_sender.send(format!("Connecting to Rizon..."))?;
+pub fn connect_and_download(request: IRCRequest, dir_path: PathBuf) -> Result<()> {
+    let mut channel_senders = vec![];
+    let mut multi_bar = MultiBar::new();
+    let mut multi_bar_handles = vec![];
+    let (status_bar_sender, status_bar_receiver) = channel();
+    let mut pb_message = String::new();
+
+    println!("Connecting to Rizon...");
 
     let mut download_handles = Vec::new();
     let mut has_joined = false;
@@ -66,7 +75,7 @@ pub fn connect_and_download(request: IRCRequest, channel_senders: Vec<Sender<i64
     let mut next = time::Instant::now() + time::Duration::from_millis(500);
     let timeout_threshold = 5;
     let mut timeout_counter = 0;
-    status_bar_sender.send(format!("Logging into Rizon..."))?;
+    println!("Logging into Rizon...");
     while !has_joined {
         let message = match connection.read_message() {
             Ok(msg) => msg,
@@ -102,14 +111,59 @@ pub fn connect_and_download(request: IRCRequest, channel_senders: Vec<Sender<i64
         //thread::sleep(time::Duration::from_micros(10));
     }
 
-    status_bar_sender.send(format!("Connected"))?;
+    println!("Connected!");
 
     let mut i = 0;
     let mut requests : Vec<DCCSend> = vec![];
     let mut resume = false;
     let mut wait = false;
-    let mut received_reply;
+    let mut catch_pak = false;
     while download_handles.len() < request.packages.len() && timeout_counter <= timeout_threshold {
+        if catch_pak {
+            let (sender, receiver) = channel();
+            let handle;
+
+            match terminal_size() {
+                Some((Width(w), _)) if requests[i].filename.len() > w as usize / 2 => { // trim the filename
+                    let filename = &requests[i].filename;
+                    let acceptable_length = w as usize / 2;
+                    let first_half = &filename[..filename.char_indices().nth(acceptable_length/2).unwrap().0];
+                    let second_half = &filename[filename.char_indices().nth_back(acceptable_length/2).unwrap().0..];
+                    if acceptable_length < 50 {
+                        pb_message.push_str(first_half);
+                    }
+                    pb_message.push_str("...");
+                    pb_message.push_str(second_half);
+                },
+                _ => pb_message.push_str(&requests[i].filename)
+            };
+            pb_message.push_str(": ");
+
+            let mut progress_bar = multi_bar.create_bar(requests[i].file_size as u64);
+            progress_bar.set_units(Units::Bytes);
+            progress_bar.message(&pb_message);
+            pb_message.clear();
+
+            handle = thread::spawn(move || { // create an individual thread for each bar in the multibar with its own i/o
+                update_bar(&mut progress_bar, receiver);
+            });
+
+            channel_senders.push(sender);
+            multi_bar_handles.push(handle);
+
+            let req = requests[i].clone();
+            let sender = channel_senders[i].clone();
+            let path = dir_path.clone();
+            let status_bar_sender_clone = status_bar_sender.clone();
+            let handle = thread::spawn(move || {
+                download_file(req, sender, path).expect("Failed to download.");
+                status_bar_sender_clone.send("Episode Finished Downloading".to_string()).unwrap();
+            });
+            download_handles.push(handle);
+            i += 1;
+            catch_pak = false;
+            continue
+        }
         if wait {
             //wait til a previous package is downloaded then proceed
             let f = fs::File::open(&requests[i-1].filename)?;
@@ -129,8 +183,7 @@ pub fn connect_and_download(request: IRCRequest, channel_senders: Vec<Sender<i64
 
         next = time::Instant::now() + time::Duration::from_millis(3000);
         timeout_counter = 0;
-        received_reply = false;
-        while !received_reply && timeout_counter <= timeout_threshold {
+        while timeout_counter <= timeout_threshold {
             let message = match connection.read_message() {
                 Ok(msg) => msg,
                 _ => return Err(anyhow!("Error reading TcpStream on pack {}", package_number))
@@ -141,9 +194,7 @@ pub fn connect_and_download(request: IRCRequest, channel_senders: Vec<Sender<i64
                 if DCC_SEND_REGEX.is_match(&msg) {
                     let request = parse_dcc_send(&msg)?;
                     requests.push(request);
-                    status_bar_sender.send(format!("Now downloading {}", &requests[i].filename))?;
                     if std::path::Path::new(&requests[i].filename).exists() {
-                        status_bar_sender.send(format!("Found an existing {}", &requests[i].filename))?;
                         let f = fs::File::open(&requests[i].filename)?;
                         let meta = f.metadata()?;
                         if (meta.len() as usize) < requests[i].file_size {
@@ -154,45 +205,25 @@ pub fn connect_and_download(request: IRCRequest, channel_senders: Vec<Sender<i64
                         }
                     }
                     if !resume {
-                        let req = requests[i].clone();
-                        let sender = channel_senders[i].clone();
-                        let path = dir_path.clone();
-                        let status_bar_sender_clone = status_bar_sender.clone();
-                        let handle = thread::spawn(move || {
-                            download_file(req, sender, path).expect("Failed to download.");
-                            status_bar_sender_clone.send("Episode Finished Downloading".to_string()).unwrap();
-                        });
-                        download_handles.push(handle);
-                        i += 1;
+                        catch_pak = true;
                     }
-                    received_reply = true;
+                    break;
                 } else if resume && msg.contains("DCC ACCEPT ") {
-                    status_bar_sender.send(format!("Attempting to resume download for {}", requests[i].filename))?;
-                    let req = requests[i].clone();
-                    let sender = channel_senders[i].clone();
-                    let path = dir_path.clone();
-                    let status_bar_sender_clone = status_bar_sender.clone();
-                    let handle = thread::spawn(move || {
-                        download_file(req, sender, path).expect("Failed to download.");
-                        status_bar_sender_clone.send("Episode Finished Downloading".to_string()).unwrap();
-                    });
-                    download_handles.push(handle);
-                    i += 1;
+                    catch_pak = true;
                     resume = false;
-                    received_reply = true;
+                    break;
                 } else if msg.contains(" queued too many ") {
                     //bot tells you that you can't queue up a new file
                     wait = true;
-                    received_reply = true;
+                    break;
                 } else if msg.contains("NOTICE ") && msg.ends_with(" You already requested") {
-                    status_bar_sender.send(format!("A previous request was made for pack {}, attempting to cancel and retry", package_number))?;
                     let xdcc_remove_cmd =
                         format!("PRIVMSG {} :xdcc remove #{}\r\n", package_bot, package_number);
                     connection.socket.write(xdcc_remove_cmd.as_bytes())?;
                     let xdcc_cancel_cmd =
                         format!("PRIVMSG {} :\x01XDCC CANCEL\x01\r\n", package_bot);
                     connection.socket.write(xdcc_cancel_cmd.as_bytes())?;
-                    received_reply = true;
+                    break;
                 }
             } else {
                 //postpone the timeout if currently downloading, if bot doesn't care to give queue message
@@ -209,10 +240,6 @@ pub fn connect_and_download(request: IRCRequest, channel_senders: Vec<Sender<i64
                 if now >= next && !dl_in_progress {
                     next = now + time::Duration::from_millis(3000);
                     timeout_counter += 1;
-                    status_bar_sender.send(format!("({}/{}) Waiting on dcc send reply for pack {}...", timeout_counter, timeout_threshold, package_number))?;
-                    if timeout_counter > timeout_threshold {
-                        status_bar_sender.send(format!("Timed out receiving dcc send for pack {}", package_number))?;
-                    }
                 }
             }
         }
@@ -220,10 +247,26 @@ pub fn connect_and_download(request: IRCRequest, channel_senders: Vec<Sender<i64
 
     connection.socket.write("QUIT\r\n".as_bytes())?;
     connection.socket.shutdown(Shutdown::Both)?;
+
+    
+    let mut status_bar = multi_bar.create_bar(requests.len() as u64);
+    status_bar.set_units(Units::Default);
+    status_bar.message(&format!("{}: ", "Waiting..."));
+    let status_bar_handle = thread::spawn(move || {
+        update_status_bar(&mut status_bar, status_bar_receiver);
+    });
+    multi_bar_handles.push(status_bar_handle);
+
+    let _ = thread::spawn(move || { // multi bar listen is blocking
+        multi_bar.listen();
+    });
+
     download_handles
         .into_iter()
         .for_each(|handle| handle.join().expect("Failed to join thread."));
     status_bar_sender.send("Success".to_string())?;
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    multi_bar_handles.into_iter().for_each(|handle| handle.join().unwrap());
     Ok(())
 }
 
@@ -274,4 +317,28 @@ fn download_file(
     file.flush()?;
 
     Ok(())
+}
+
+fn update_status_bar(progress_bar: &mut ProgressBar<Pipe>, receiver: Receiver<String>) {
+    while let Ok(progress) = receiver.recv() {
+        progress_bar.message(&format!("{} ", progress));
+        match progress.as_str() {
+            "Episode Finished Downloading" => { progress_bar.inc(); },
+            "Success" => break,
+            _ => progress_bar.tick()
+        }
+    }
+    progress_bar.tick();
+    progress_bar.finish()
+}
+
+fn update_bar(progress_bar: &mut ProgressBar<Pipe>, receiver: Receiver<i64>) {
+    while let Ok(progress) = receiver.recv() {
+        if progress > 0 {
+            progress_bar.set(progress as u64);
+        } else {
+            progress_bar.tick();
+            return progress_bar.finish();
+        }
+    };
 }
