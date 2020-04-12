@@ -61,6 +61,16 @@ fn main() {
 
     let cli = args.len() > 1;
 
+    if cli {
+        if args[1].starts_with("/msg"){
+            let len = args.len();
+            for ep in 1..=len {
+                let msg = args[ep].trim_start_matches("/msg ");
+                let package: Vec<&str> = msg.splitn(2, " xdcc send #").collect();
+            }
+        }
+    }
+
     let mut query: String = String::new();
     let resolution: Option<u16>;
     let mut episode: Option<u16> = None;

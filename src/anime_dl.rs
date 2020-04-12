@@ -59,12 +59,6 @@ impl IRCConnection {
 }
 
 pub fn connect_and_download(request: IRCRequest, dir_path: PathBuf) -> Result<()> {
-    let mut channel_senders = vec![];
-    let mut multi_bar = MultiBar::new();
-    let mut multi_bar_handles = vec![];
-    let (status_bar_sender, status_bar_receiver) = channel();
-    let mut pb_message = String::new();
-
     println!("Connecting to Rizon...");
 
     let mut download_handles = Vec::new();
@@ -113,11 +107,18 @@ pub fn connect_and_download(request: IRCRequest, dir_path: PathBuf) -> Result<()
 
     println!("Connected!");
 
+    let mut channel_senders = vec![];
+    let mut multi_bar = MultiBar::new();
+    let mut multi_bar_handles = vec![];
+    let (status_bar_sender, status_bar_receiver) = channel();
+    let mut pb_message = String::new();
+
     let mut i = 0;
     let mut requests : Vec<DCCSend> = vec![];
     let mut resume = false;
     let mut wait = false;
     let mut catch_pak = false;
+
     while download_handles.len() < request.packages.len() && timeout_counter <= timeout_threshold {
         if catch_pak {
             let (sender, receiver) = channel();
