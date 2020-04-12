@@ -25,7 +25,7 @@ pub struct IRCRequest {
     pub server: String,
     pub channel: String,
     pub nickname: String,
-    pub bot: Vec<String>,
+    pub bots: Vec<String>,
     pub packages: Vec<String>,
 }
 
@@ -59,7 +59,7 @@ impl IRCConnection {
     }
 }
 
-pub fn connect_and_download(request: IRCRequest, dir_path: PathBuf) -> Result<()> {
+pub fn connect_and_download(request: IRCRequest, dir_path: Option<PathBuf>) -> Result<()> {
     println!("Connecting to Rizon...");
 
     let mut download_handles = Vec::new();
@@ -78,7 +78,7 @@ pub fn connect_and_download(request: IRCRequest, dir_path: PathBuf) -> Result<()
         };
         let now = time::Instant::now();
         if let Some(msg) = message {
-            //println!("{}",msg);
+            println!("{}",msg);
             if msg.starts_with("PING :") {
                 let pong = msg.replace("PING", "PONG");
                 connection.socket.write(pong.as_bytes())?;
@@ -199,7 +199,7 @@ pub fn connect_and_download(request: IRCRequest, dir_path: PathBuf) -> Result<()
             }
             wait = false;
         }
-        let package_bot = &request.bot[i];
+        let package_bot = &request.bots[i];
         let package_number = &request.packages[i];
         if !resume {
             let xdcc_send_cmd =
@@ -329,8 +329,10 @@ fn parse_dcc_send(message: &String) -> Result<DCCSend> {
 fn download_file(
     request: DCCSend,
     sender: Sender<i64>,
-    dir_path: PathBuf) -> Result<()> {
-    let file_path = dir_path.join(&request.filename);
+    dir_path: Option<PathBuf>) -> Result<()> {
+    let file_path = dir_path.and_then(|dir_path| {
+        Some(dir_path.join(&request.filename))
+    }).unwrap_or_else(|| PathBuf::from(&request.filename));
     let mut file = match fs::OpenOptions::new().append(true).open(file_path.clone()) {
         Ok(existing_file) => existing_file,
         _ => fs::File::create(file_path.clone())?

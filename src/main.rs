@@ -61,14 +61,29 @@ fn main() {
 
     let cli = args.len() > 1;
 
-    if cli {
-        if args[1].starts_with("/msg"){
-            let len = args.len();
-            for ep in 1..=len {
-                let msg = args[ep].trim_start_matches("/msg ");
-                let package: Vec<&str> = msg.splitn(2, " xdcc send #").collect();
-            }
+    if cli && args[1].starts_with("/msg"){
+        let len = args.len() - 1;
+        let mut bots = Vec::with_capacity(len);
+        let mut packages = Vec::with_capacity(len);
+        for ep in 1..=len {
+            let msg = args[ep].trim_start_matches("/msg ");
+            let package: Vec<&str> = msg.splitn(2, " xdcc send #").collect();
+            bots.push(package[0].to_string());
+            packages.push(package[1].to_string());
         }
+        let irc_request = anime_dl::IRCRequest {
+            server: IRC_SERVER.to_string(),
+            channel: IRC_CHANNEL.to_string(),
+            nickname: IRC_NICKNAME.to_string(),
+            bots,
+            packages,
+        };
+    
+        if let Err(e) = anime_dl::connect_and_download(irc_request, None) {
+            eprintln!("{}", e);
+            exit(1);
+        };
+        return
     }
 
     let mut query: String = String::new();
@@ -198,7 +213,7 @@ fn main() {
         server: IRC_SERVER.to_string(),
         channel: IRC_CHANNEL.to_string(),
         nickname: IRC_NICKNAME.to_string(),
-        bot: dccpackages.clone().into_iter().map(|package| package.bot).collect(),
+        bots: dccpackages.clone().into_iter().map(|package| package.bot).collect(),
         packages: dccpackages.clone().into_iter().map(|package| package.number.to_string()).collect(),
     };
 
@@ -209,7 +224,7 @@ fn main() {
         None
     };
 
-    if let Err(e) = anime_dl::connect_and_download(irc_request, dir_path.clone()) {
+    if let Err(e) = anime_dl::connect_and_download(irc_request, Some(dir_path.clone())) {
         eprintln!("{}", e);
         exit(1);
     };
