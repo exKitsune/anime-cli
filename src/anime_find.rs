@@ -1,9 +1,5 @@
-extern crate reqwest;
-extern crate serde;
-
 use reqwest::Error;
 use serde::Deserialize;
-use std::result::Result;
 
 const API_URL: &str = "https://api.nibl.co.uk/nibl";
 
@@ -23,12 +19,12 @@ pub fn find_package(query: &String, episode: &Option<u16>) -> Result<DCCPackage,
 
     let first_package = match packages.first() {
         Some(p) => p,
-        None => return Err("Could not find any result for this query.".to_string()),
+        _ => return Err("Could not find any result for this query.".to_string()),
     };
 
     let bot_name = match find_bot_name(&first_package.bot_id) {
         Some(b) => b,
-        None => return Err("Results found, but unknown bot.".to_string()),
+        _ => return Err("Results found, but unknown bot.".to_string()),
     };
 
     Ok(DCCPackage {
@@ -41,8 +37,9 @@ pub fn find_package(query: &String, episode: &Option<u16>) -> Result<DCCPackage,
 
 fn search_packages(query: &String, episode: &Option<u16>) -> Result<Vec<Package>, Error> {
     let mut search_url = format!("{}/search?query={}", API_URL, query);
-    if episode.is_some() {
-        search_url += &format!("&episodeNumber={}", episode.unwrap());
+    if let Some(episode) = episode {
+        search_url.push_str("&episodeNumber={}");
+        search_url.push_str(&episode.to_string());
     }
     let mut response = reqwest::get(&search_url)?;
     let search_result: SearchResult = response.json()?;
@@ -54,10 +51,10 @@ fn search_packages(query: &String, episode: &Option<u16>) -> Result<Vec<Package>
 
 fn find_bot_name(id: &i64) -> Option<String> {
     let bot_list = get_bot_list();
-    let bot = bot_list.iter().find(|bot| &bot.id == id);
-    match bot {
-        Some(b) => Some(b.name.to_string()),
-        None => None,
+    if let Some(bot) = bot_list.iter().find(|bot| &bot.id == id) {
+        Some(bot.name.to_string())
+    } else {
+        None
     }
 }
 

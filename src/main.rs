@@ -1,11 +1,3 @@
-#[cfg(feature = "mpv")]
-extern crate mpv;
-extern crate term_size;
-
-mod anime_dl;
-mod anime_find;
-
-use getopts::Options;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::ffi::OsStr;
@@ -13,9 +5,11 @@ use std::process::exit;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
 use std::io;
-
+use getopts::Options;
 use pbr::{MultiBar, Pipe, ProgressBar, Units};
-use std::error::Error;
+
+mod anime_dl;
+mod anime_find;
 
 static IRC_SERVER: &str = "irc.rizon.net:6667";
 static IRC_CHANNEL: &str = "nibl";
@@ -55,13 +49,10 @@ fn print_usage(program: &str, opts: Options) {
 fn get_cli_input(prompt: &str) -> String {
     println!("{}", prompt);
     let mut input = String::new();
-    match io::stdin().read_line(&mut input) {
-        Ok(_) => {},
-        Err(e) => {
-            eprintln!("{}", e);
-            eprintln!("Please enter a normal query");
-            exit(1);
-        }
+    if let Err(e) = io::stdin().read_line(&mut input) {
+        eprintln!("{}", e);
+        eprintln!("Please enter a normal query");
+        exit(1);
     }
     input.to_string().replace(|c: char| c == '\n' || c == '\r', "")
 }
@@ -81,7 +72,7 @@ fn main() {
     // https://github.com/rust-lang-nursery/getopts/issues/46
     if args.contains(&"-h".to_string()) || args.contains(&"--help".to_string()) {
         print_usage(&program, opts);
-        exit(0);
+        return
     }
     let mut noshow = false;
     if args.contains(&"-n".to_string()) || args.contains(&"--noshow".to_string()) {
@@ -108,19 +99,19 @@ fn main() {
         resolution = match matches.opt_str("r").as_ref().map(String::as_str) {
             Some("0") => None,
             Some(r) => Some(parse_number(String::from(r))),
-            None => Some(720),
+            _ => Some(720),
         };
 
         query = matches.opt_str("q").unwrap();
 
         episode = match matches.opt_str("e") {
             Some(ep) => Some(parse_number(ep)),
-            None => None
+            _ => None
         };
 
         batch = match matches.opt_str("b") {
             Some(b) => Some(parse_number(b)),
-            None => None
+            _ => None
         }
 
     } else {
@@ -147,7 +138,7 @@ fn main() {
 
     query = query + match resolution { // If resolution entered, add a resolution to the query
         Some(x) => format!(" {}", x),
-        None => "".to_string(),
+        _ => "".to_string(),
     }.as_str();
 
     if batch.is_some() && batch.unwrap() < episode.unwrap_or(1) { // Make sure batch end is never smaller than episode start
@@ -187,7 +178,7 @@ fn main() {
 
     match fs::create_dir(&query) { // organize
         Ok(_) => println!{"Created folder {}", &query},
-        Err(_) => eprintln!{"Could not create a new folder, does it exist?"},
+        _ => eprintln!{"Could not create a new folder, does it exist?"},
     };
     let dir_path= Path::new(&query).to_owned();
 
@@ -205,27 +196,21 @@ fn main() {
 
         let pb_message;
         match terminal_dimensions {
-            Some((w, _)) => {
-                let acceptable_length = w / 2;
-                if &dccpackages[i].filename.len() > &acceptable_length { // trim the filename
-                    let first_half = &dccpackages[i].filename[..dccpackages[i].filename.char_indices().nth(acceptable_length / 2).unwrap().0];
-                    let second_half = &dccpackages[i].filename[dccpackages[i].filename.char_indices().nth_back(acceptable_length / 2).unwrap().0..];
-                    if acceptable_length > 50 { // 50 and 35 are arbitrary numbers
-                        pb_message = format!("{}...{}: ", first_half, second_half);
-                    } else if acceptable_length > 35 {
-                        pb_message = format!("...{}: ", second_half);
-                    } else {
-                        pb_message = format!("{} added to list", dccpackages[i].filename);
-                        safe_to_spawn_bar = false;
-                    }
-                } else {
-                    pb_message = format!("{}: ", dccpackages[i].filename);
-                }
-            },
-            None => {
-                pb_message = format!("{} added to list", dccpackages[i].filename);
-                safe_to_spawn_bar = false;
-            },
+          Some((w, _)) => {
+              let acceptable_length = w / 2;
+              if &dccpackages[i].filename.len() > &acceptable_length { // trim the filename
+                  let first_half = &dccpackages[i].filename[..dccpackages[i].filename.char_indices().nth(acceptable_length/2).unwrap().0];
+                  let second_half = &dccpackages[i].filename[dccpackages[i].filename.char_indices().nth_back(acceptable_length/2).unwrap().0..];
+                  if acceptable_length < 50 {
+                      pb_message = format!("{}...{}: ", first_half, second_half);
+                  } else {
+                      pb_message = format!("...{}: ", second_half);
+                  }
+              } else {
+                  pb_message = format!("{}: ", dccpackages[i].filename);
+              }
+          },
+            _ => pb_message = format!("{}: ", dccpackages[i].filename),
         };
         let progress_bar;
         if safe_to_spawn_bar {
@@ -286,12 +271,9 @@ fn main() {
             }
     }
 
-    match anime_dl::connect_and_download(irc_request, channel_senders, status_bar_sender, dir_path.clone()) {
-        Ok(_) => {},
-        Err(e) => {
-            eprintln!("{}", e);
-            exit(1);
-        }
+    if let Err(e) = anime_dl::connect_and_download(irc_request, channel_senders, status_bar_sender, dir_path.clone()) {
+        eprintln!("{}", e);
+        exit(1);
     };
     if let Some(vh) = video_handle {
         vh.join().unwrap();
@@ -302,8 +284,8 @@ fn main() {
 fn update_status_bar(progress_bar: Option<ProgressBar<Pipe>>, receiver: Receiver<String>) {
     let reader = |num: Result<String, _>, msg: &str| { match num {
         Ok(p) => p,
-        Err(_) => {
-            eprintln!("{}", msg);
+        _ => {
+            eprintln!("Error updating status bar");
             exit(1);
         },
     }};
@@ -328,42 +310,35 @@ fn update_status_bar(progress_bar: Option<ProgressBar<Pipe>>, receiver: Receiver
     } else {
         let mut progress = reader(receiver.recv(), "Error updating status");
 
-        while !progress.eq("Success") {
-            println!("{} ", progress);
-            progress = reader(receiver.recv(), "Error updating status");
-        }
-
-        println!("{} ", progress);
+        progress_bar.message(&format!("{} ", progress));
+        progress = match receiver.recv() {
+            Ok(p) => p,
+            _ => {
+                eprintln!("Error updating status bar");
+                exit(1);
+            },
+        };
     }
 }
 
 fn update_bar(progress_bar: Option<ProgressBar<Pipe>>, receiver: Receiver<i64>, status_bar_sender: Sender<String>) {
     let reader = |num: Result<i64, _>, msg: &str| { match num {
         Ok(p) => p,
-        Err(_) => {
-            eprintln!("{}", msg);
+        _ => {
+            eprintln!("Error updating progress bar");
             exit(1);
         },
-    }};
-
-    if progress_bar.is_some() {
-        let mut pb = progress_bar.unwrap();
-        pb.tick();
-
-        let mut progress = reader(receiver.recv(), "Error updating progress bar");
-
-        while progress > 0 {
-            pb.set(progress as u64);
-
-            progress = reader(receiver.recv(), "Error updating progress bar");
-        }
-        pb.finish();
-    } else {
-        let mut progress = reader(receiver.recv(), "Error updating progress");
-
-        while progress > 0 {
-            progress = reader(receiver.recv(), "Error updating progress");
-        }
+    };
+    //println!("{} progress, progress);
+    while progress > 0 {
+        progress_bar.set(progress as u64);
+        progress = match receiver.recv() {
+            Ok(p) => p,
+            _ => {
+                eprintln!("Error updating progress bar");
+                exit(1);
+            },
+        };
     }
 
     status_bar_sender.send("Episode Finished Downloading".to_string()).unwrap();
@@ -374,8 +349,11 @@ fn parse_number(str_num: String) -> u16 {
     match c_str_num.parse::<u16>() {
         Ok(e) => e,
         Err(err) => {
-            if err.description().eq_ignore_ascii_case("cannot parse integer from empty string") { return 0 }
-            eprintln!("Input must be numeric.");
+            if err.to_string() == "cannot parse integer from empty string" {
+                eprintln!("{}", err);
+            } else {
+                eprintln!("Input must be numeric.");
+            }
             exit(1);
         }
     }
@@ -471,9 +449,8 @@ fn play_video(filenames: Vec<String>, dir_path: PathBuf) -> thread::JoinHandle<(
                 break;
             }
         }
-        match opener::open(video_path) {
-            Ok(_) => {},
-            Err(e) => { eprintln!("{:?}", e)},
+        if let Err(e) = opener::open(video_path) {
+            eprintln!("{:?}", e);
         };
     })
 }

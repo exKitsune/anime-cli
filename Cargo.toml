@@ -12,16 +12,17 @@ keywords = ["anime", "streaming", "cli", "xdcc"]
 categories = ["command-line-utilities"]
 
 [dependencies]
-getopts = "0.2.19"
-lazy_static = "1.3.0"
-mpv = { version = "0.2.3", optional = true}
-pbr = "1.0.1"
+anyhow = "1.0"
+getopts = "0.2"
+pbr = "1.0"
 regex = "1"
 reqwest = "0.9.19"
 serde = "1.0.98"
 rand = "0.7.3"
 term_size = "1.0.0-beta1"
-opener = "0.4.1"
+opener = "0.4"
+once_cell = { version = "1.3", features = ["parking_lot"] }
+mpv = { version = "0.2", optional = true }
 
 [features]
 default = ["mpv"]
